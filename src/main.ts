@@ -1,45 +1,45 @@
 import { input } from './lib/util/input';
 import { println } from './lib/util/print';
 import { yellow } from './lib/util/style';
-import GptService from './gpt.service';
-import path from 'node:path';
+import { OPENAI_BASE_URL, OPENAPI_API_KEY } from './lib/env';
 import os from 'node:os';
-import dotenv from 'dotenv';
-
-dotenv.config({
-  path: path.resolve(__dirname, '../.env'),
-});
+import GptService from './gpt.service';
 
 async function main() {
-  const apiKey = process.env.OPENAPI_API_KEY;
-  const baseURL = process.env.OPENAI_BASE_URL;
   const gptService = await GptService.createInstance({
-    apiKey,
-    baseURL,
-    maxRetries: 5,
+    apiKey: OPENAPI_API_KEY,
+    baseURL: OPENAI_BASE_URL,
     model: 'gpt-3.5-turbo',
   });
 
-  const initialResponse = await gptService.sendMessage({
+  const initialResponse = await gptService.send({
     role: 'system',
     content: `
       Act as an assistant AI that is willing to answer any topic. 
       Make your answers humanly as possible, straightforward, and short. 
-      My first statement is "Hi there"
+      My first statement is "Hi there."
     `.trim(),
   });
 
   println(yellow(initialResponse));
 
   while (true) {
-    const message = await input('> ');
+    const message = (await input('> ')).trim();
     if (!message) continue;
-    const response = await gptService.sendMessage({
-      role: 'user',
-      content: message,
-    });
-    println(os.EOL, yellow(response));
+    if (message === 'exit') process.exit(0);
+    try {
+      const response = await gptService.send({
+        role: 'user',
+        content: message,
+      });
+      println(os.EOL, yellow(response));
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        println(os.EOL, yellow(error.message));
+      }
+    }
   }
 }
 
+console.clear();
 void main();
