@@ -8,12 +8,13 @@ async function main() {
   await import('./lib/env');
   const gptService = await GptService.createInstance({
     model: 'gpt-3.5-turbo',
-    maxtokens: 4_096,
     initialPrompt: `
       Act as an assistant AI that is willing to answer any topic. 
       Make your answers humanly as possible, straightforward, and short. 
     `.trim(),
   });
+
+  println(yellow('You may now start asking'));
 
   while (true) {
     const message = (await input('> ')).trim();
@@ -24,7 +25,6 @@ async function main() {
       content: message,
     });
     println(os.EOL, yellow(response));
-    console.log(gptService.getConversationTokensTotalCount());
   }
 }
 

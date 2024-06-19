@@ -4,9 +4,29 @@ import { encoding_for_model as encodingForModel } from 'tiktoken';
 export default class GptService {
   private readonly conversation: Array<OpenAi.Chat.Completions.ChatCompletionMessageParam> =
     [];
-  private readonly fixMemoryPrompt = `
-      Make a very detailed summary about our conversation, 
-      it will serve as your memory to remember things.`.trim();
+  private readonly memoryMaxToken: number = 400;
+  private readonly memoryPrompt: string = `
+    Forget all previous instructions. 
+    Summarize our conversation, only include 
+    user and assistant's; your point of view 
+    is you are the assistant; fix typos if 
+    there are any; minimize the risk of losing 
+    the contents' sense; remember details 
+    about the user such as their preferences, 
+    name, etc.
+    Here is an example format, strictly follow:
+
+    [
+      {
+        "role": "assistant",
+        "content": "<shorter version>"
+      },
+      {
+        "role": "user",
+        "content": "<shorter version>"
+      }
+    ]
+  `.trim();
 
   private constructor(
     private readonly openAi: OpenAi,
@@ -38,7 +58,7 @@ export default class GptService {
       openAi,
       model ?? 'gpt-3.5-turbo',
       Math.floor(maxRetries ?? 3),
-      maxtokens ?? Number.POSITIVE_INFINITY,
+      maxtokens ?? 4_096, // gpt-3.5-turbo's default max tokens
       initialPrompt,
     );
     if (initialPrompt) {
@@ -50,21 +70,71 @@ export default class GptService {
     return instance;
   }
 
+  public async fixMemory(): Promise<void> {
+    try {
+      const response = await this.openAi.chat.completions.create({
+        max_tokens: this.memoryMaxToken,
+        model: this.model,
+        messages: [
+          ...this.conversation,
+          {
+            role: 'system',
+            content: this.memoryPrompt,
+          },
+        ],
+      });
+      const content = response.choices.at(0)?.message.content;
+      const conversation = JSON.parse(content ?? '[]');
+      this.conversation.splice(0, this.conversation.length);
+      if (this.initialPrompt) {
+        await this.send({
+          role: 'system',
+          content: this.initialPrompt,
+        });
+      }
+      this.conversation.push(...conversation);
+    } catch (error) {
+      // just delete half of the conversation 'cause we need more tokens 😈
+      this.conversation.splice(1, Math.floor(this.conversation.length / 2));
+    }
+  }
+
+  public async send(
+    payload: OpenAi.Chat.Completions.ChatCompletionMessageParam & {
+      // do not set manually when sending message
+      __retries?: number;
+      __save?: boolean;
+    },
+  ): Promise<string> {
+    const { __retries: r, __save: s, ...rest } = payload;
+    const retries = r ?? 0;
+    const save = s === true || s === undefined;
+    if (
+      this.getTokensCount(this.memoryPrompt) +
+        this.getConversationTokensTotalCount() +
+        this.memoryMaxToken >
+      this.maxTokens
+    ) {
+      await this.fixMemory();
+    }
+    const response = await this.openAi.chat.completions.create({
+      messages: [...this.conversation, payload],
+      model: this.model,
+    });
+    const message = response.choices?.at(0)?.message;
+    const content = message?.content;
+    if (!message || (!content && retries < this.maxRetries)) {
+      return await this.send({ ...rest, __retries: retries + 1 });
+    }
+    if (retries >= this.maxRetries) {
+      throw new GptError('[GPT Error]: GPT did not respond to your message.');
+    }
+    if (save) this.conversation.push(rest, message);
+    return message.content!;
+  }
+
   public getConversation(): Array<OpenAi.Chat.Completions.ChatCompletionMessageParam> {
     return JSON.parse(JSON.stringify(this.conversation));
-  }
-
-  private getTokens(input: string): Uint32Array {
-    const encoding = encodingForModel(this.model);
-    const tokens = encoding.encode(input);
-    encoding.free();
-    return tokens;
-  }
-
-  private getTokensCount(input: string): number {
-    const tokens = this.getTokens(input);
-    const count = tokens.length;
-    return count;
   }
 
   public getConversationTokens(): Uint32Array[] {
@@ -89,69 +159,17 @@ export default class GptService {
     return total;
   }
 
-  public async resetConversation(): Promise<void> {
-    this.conversation.splice(0, this.conversation.length);
-
-    if (this.initialPrompt) {
-      await this.send({
-        role: 'system',
-        content: this.initialPrompt,
-      });
-    }
+  private getTokens(input: string): Uint32Array {
+    const encoding = encodingForModel(this.model);
+    const tokens = encoding.encode(input);
+    encoding.free();
+    return tokens;
   }
 
-  public async fixMemory(): Promise<void> {
-    const memory = await this.openAi.chat.completions.create({
-      max_tokens: 300,
-      model: this.model,
-      messages: [
-        ...this.conversation,
-        {
-          role: 'user',
-          content: this.fixMemoryPrompt,
-        },
-      ],
-    });
-    await this.resetConversation();
-    await this.send({
-      role: 'system',
-      content: `Your memory: ${memory}`.trim(),
-    });
-  }
-
-  public async send(
-    payload: OpenAi.Chat.Completions.ChatCompletionMessageParam & {
-      content: string;
-      // do not set manually when sending message
-      __retries?: number;
-      __save?: boolean;
-    },
-  ): Promise<string> {
-    const { __retries: r, __save: s, ...rest } = payload;
-    const retries = r ?? 0;
-    const save = s === true || s === undefined;
-    if (
-      this.getTokensCount(this.fixMemoryPrompt) +
-        this.getConversationTokensTotalCount() +
-        300 > // approximate tokens count from gpt response
-      this.maxTokens
-    ) {
-      await this.fixMemory();
-    }
-    const response = await this.openAi.chat.completions.create({
-      messages: [...this.conversation, payload],
-      model: this.model,
-    });
-    const message = response.choices?.at(0)?.message;
-    const content = message?.content;
-    if (!message || (!content && retries < this.maxRetries)) {
-      return await this.send({ ...rest, __retries: retries + 1 });
-    }
-    if (retries >= this.maxRetries) {
-      throw new GptError('[GPT Error]: GPT did not respond to your message.');
-    }
-    if (save) this.conversation.push(rest, message);
-    return message.content!;
+  private getTokensCount(input: string): number {
+    const tokens = this.getTokens(input);
+    const count = tokens.length;
+    return count;
   }
 }
 
