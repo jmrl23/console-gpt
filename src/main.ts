@@ -2,7 +2,7 @@ import os from 'node:os';
 import GptService from './gpt.service';
 import { input } from './lib/util/input';
 import { println } from './lib/util/print';
-import { yellow } from './lib/util/style';
+import { yellow, blue } from './lib/util/style';
 
 async function main() {
   await import('./lib/env');
@@ -19,7 +19,21 @@ async function main() {
   while (true) {
     const message = (await input('> ')).trim();
     if (!message) continue;
-    if (message === 'exit') process.exit(0);
+    if (message === '/exit') process.exit(0);
+    if (message === '/clear') {
+      console.clear();
+      continue;
+    }
+    if (message === '/fix') {
+      await gptService.fixMemory();
+      println(os.EOL, blue('Memory fixed'));
+      continue;
+    }
+    if (message === '/conversation') {
+      const conversation = gptService.getConversation();
+      println(os.EOL, blue(JSON.stringify(conversation, null, 2)));
+      continue;
+    }
     const response = await gptService.send({
       role: 'user',
       content: message,
