@@ -24,13 +24,13 @@ async function main() {
       console.clear();
       continue;
     }
-    if (message === '/fix') {
-      await gptService.fixMemory();
+    if (message === '/summarize') {
+      await gptService.summarizeMessages();
       println(os.EOL, blue('Memory fixed'));
       continue;
     }
-    if (message === '/conversation') {
-      const conversation = gptService.getConversation();
+    if (message === '/messages') {
+      const conversation = gptService.getMessages();
       println(os.EOL, blue(JSON.stringify(conversation, null, 2)));
       continue;
     }
